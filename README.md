@@ -9,14 +9,19 @@ We have integrated DiVRGE into a snakemake workflow pipeline. For more informati
 ## Table of Contents
   - [Quick Start](#quick-start)
   - [Setup and Requirements](#setup)
+  - [Adjusting config and running](#config-run)
+  - [Output](#output)
+  - [What can you do with the output?](#use-case)
+  - [Reference and Citation](#reference)
+  - [Links and Resources](#links-resources)
 
-<h2 align="center" id="quick-start">Quick Start </h2>
+<h2 align="center" id="quick-start">Quick Start </h2><br>
 1. Clone repo<br>
 2. Setup Python Virtual Environment<br>
 3. Adjust config file<br>
 4. Run snakemake<br>
 
-<h2 align="center" id="setup"> Setup and Requirements</h2>
+<h2 align="center" id="setup"> Setup and Requirements</h2><br>
 
 <p align="center">
 After cloning the DiVRGE repo, check that all required programs and packages listed below are installed.<br>
@@ -84,7 +89,7 @@ tzdata          2023.3
 >deactivate 
 ```
 
-<h2 align="center"> Adjusting config and running </h2><br>
+<h2 align="center" id="config-run"> Adjusting config and running </h2>
 
 ## snakefile_main_align (recommended): Align + SNV + DiVRGE <br>
 
@@ -197,7 +202,8 @@ Split-read aligners differ in their sam formats. If not specified in the aligner
 ```
 
 ```
-<h2 align="center"> Output </h2><br>
+
+<h2 align="center" id="output"> Output </h2><br>
 
 If running the recommended **snakemake_main_align** pipeline: 
 - `bamfiles/rmdups/`: alignments
@@ -208,22 +214,16 @@ If running the recommended **snakemake_main_align** pipeline:
 - `benchmarks`: benchmarking for runs
 
 
-
-
-
-
-
-<h2 align="center"> What can you do with the output? </h2><br>
+<h2 align="center" id="use-case"> What can you do with the output? </h2><br>
 
 - Calculate deletion richness<br>
 - Identify hotspots of deletion start/end coordinates<br>
 - Calculate relative frequency using coverage information<br>
 
-<h2 align="center"> Reference </h2><br>
+<h2 align="center" id="reference"> Reference </h2><br>
 
+<h2 align="center" id="links-resources"> Links and Resources </h2><br>
 
-
-<h2 align="center"> Links </h2><br>
 1. https://sourceforge.net/projects/bbmap/<br>
 2. https://github.com/alexdobin/STAR<br>
 3. https://samtools.github.io/hts-specs/SAMv1.pdf<br>
