@@ -100,7 +100,7 @@ This workflow trims (trimmomatic) and aligns (BBmap) paired-end fastq data. BBma
 - Do not rename the file!
 - This workflow works with paired-end seq. data (must adjust for single-end data)
 
-- run **snakefile_main_align**. Must include '--use-envmodules' flag. See below for an example of a simple snakemake run with 2 cores:
+- run **snakefile_main_align**. Must include '--use-envmodules' flag. See below for an example of a simple snakemake run with 4 cores:
 
 ```
 >sinteractive --cpus-per-task=4 --mem=8GB
@@ -108,7 +108,7 @@ This workflow trims (trimmomatic) and aligns (BBmap) paired-end fastq data. BBma
 >snakemake -c4 --use-envmodules -s snakefile_main_align
 ```
 
-When working with a large number of samples, consider grouping using the 'group components' function.   
+When working with a large number of samples, consider grouping using the 'group-components' function.   
 `--jobs [SAMPLES + 2]` - The number of samples within your dataset PLUS 2 additional for the calc and cat rules in the snakefile  
 `--group-components align = [NUMBER OF SAMPLES TO RUN TOGETHER]` - the number of samples to group  
 `--cluster "[WORKLOAD MANAGER AND RESOURCES]` - resources necessary for each batch of jobs  
