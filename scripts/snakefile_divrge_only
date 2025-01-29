@@ -1,15 +1,20 @@
 # Author: Kate Johnson
-# module load snakemake/6.12.3
-# snakemake -c2 --use-envmodules -s snakefile_divrge_only
+# module load snakemake
+# for an interactive session you can run:
+# snakemake -c4 --use-envmodules -s snakefile_divrge_only
+# for large batches of samples you can run: jobs = # of samples + 2, divrge= number of samples you want to group/sbatch run
+# the following will group 24 samples of the 288 samples with sbatch resources of 4 cpus, 4 G of memory, and a time of 30 min:
+# snakemake --jobs 290 --use-envmodules --group-components divrge=24 --cluster "sbatch --cpus-per-task=4 --mem=4G --time=00:30:00" --max-jobs-per-second 1 --max-status-checks-per-second 0.01 -s snakefile_align_divrge
+# the additional 2 jobs considers the calculations and cat rules
 
-import re
-VERSION = 1.3
+VERSION = 4.0
 
 configfile: "config_divrge.yaml"
 
+import re
 
-BAMS, = glob_wildcards(config["params"]["bamdir"] + "/{sample}" + config["params"]["bam_ending"])
-SAMPLES = sorted(set([x for x in BAMS if "Undetermined" not in x]))
+BAM, = glob_wildcards(config["params"]["bamfiles"] + "/" + config["params"]["begin"] + "{sample}" + config["params"]["ending"])
+SAMPLES = sorted(set([x for x in BAM if "Undetermined" not in x]))
 print(SAMPLES)
 
 wildcard_constraints:
@@ -17,101 +22,66 @@ wildcard_constraints:
 
 rule all:
     input:
-        expand(config["params"]["bamdir"] + "/{sample}" + config["params"]["bam_ending"], sample = SAMPLES),
-        expand(config["params"]["output"] + "N_files/{sample}." + config["params"]["strain"].upper() + ".split.txt", sample = SAMPLES),
         expand(config["params"]["output"] + "DVG/{sample}.DVG.FINAL.OneGap." + config["params"]["strain"].upper() + ".N" + config['divrge_param']['gap_size'] + ".Mis" + config["divrge_param"]["mismatch"] + ".M" + config["divrge_param"]["align_length"] + ".G" + config["divrge_param"]["group_size"] + ".csv", sample = SAMPLES),
-        config["params"]["output"] + "DVG/" + config["params"]["strain"].upper() + ".FeaturesOutput.csv",
-        config["params"]["output"] + "DVG/" + config["params"]["strain"].upper() + ".FeaturesOutput.txt",
-        config["params"]["output"] + "DVG/" + config["params"]["strain"].upper() + ".FeaturesOutput.txt.summary",
-        config["params"]["gtf_dir"] + "/"  + config["params"]["strain"].upper() + ".gtf",
         config["params"]["output"] + "DVG/" + config["params"]["strain"].upper() + ".DVG.FINAL.OneGap." + "N" + config['divrge_param']['gap_size'] + ".Mis" + config["divrge_param"]["mismatch"] + ".M" + config["divrge_param"]["align_length"] + ".G" + config["divrge_param"]["group_size"] + ".csv",
-
-rule make_gtf:
-    input:
-        ref=config["params"]["ref"],
-    output:
-        gtf_file=config["params"]["gtf_dir"] + "/"  + config["params"]["strain"].upper() + ".gtf",
-    group: "post"
-    params:
-        gtf_dir=config["params"]["gtf_dir"],
-        strain=config["params"]["strain"].upper(),
-	script_dir=config["params"]["script_dir"],
-    envmodules:
-        config["mod_params"]["python_mod"],
-    shell:
-        """
-        python3 {params.script_dir}make_gtf.py \
-                -r {input.ref} \
-                -s {params.gtf_dir} \
-                -p {params.strain}
-        """
-
-rule prep_deletions:
-    input:
-        rmd_bam=expand(config["params"]["bamdir"] + "/{sample}" + config["params"]["bam_ending"], sample = SAMPLES),
-        gtf_file=config["params"]["gtf_dir"] + "/"  + config["params"]["strain"].upper() + ".gtf",
-    output:
-        feat_file_csv=config["params"]["output"] + "DVG/" + config["params"]["strain"].upper() + ".FeaturesOutput.csv",
-        feat_file_txt=config["params"]["output"] + "DVG/" + config["params"]["strain"].upper() + ".FeaturesOutput.txt",
-        feat_file_summ=config["params"]["output"] + "DVG/" + config["params"]["strain"].upper() + ".FeaturesOutput.txt.summary",
-    group: "post"
-    params:
-        direct=config["params"]["output"] + "N_files/"
-    threads: 4
-    envmodules:
-        config["mod_params"]["subread_mod"],
-    shell:
-        """
-        featureCounts -T 4 -B -p -t exon -a {input.gtf_file} -o {output.feat_file_txt} {input.rmd_bam}
-        sed -i '1d' {output.feat_file_txt}
-        sed 's/\t/,/g' {output.feat_file_txt} > {output.feat_file_csv}
-        #rm -r {params.direct}
-        """
+        expand(config["params"]["output"] + "read_depth/{sample}." + config["params"]["strain"].upper() + ".q" + config['divrge_param']['qual_cutoff'] + ".rd.csv", sample=SAMPLES),
+        config["params"]["output"] + "read_depth/" + config["params"]["strain"].upper() + ".rd_calculations.csv",
 
 
 rule pull_split:
     input:
-        rmd_bam=config["params"]["bamdir"] + "/{sample}" + config["params"]["bam_ending"],
+        rmd_bam=config["params"]["bamfiles"] + "/" + config["params"]["begin"] + "{sample}" + config["params"]["ending"],
     output:
-        split_txt =config["params"]["output"] + "N_files/{sample}." + config["params"]["strain"].upper() + ".split.txt"
-    group: "post"
+        split_txt = temp(config["params"]["output"] + "N_files/{sample}." + config["params"]["strain"].upper() + ".split.txt"),
+        filt_bam=temp(config["params"]["bamfiles"] + "/{sample}." + config["params"]["strain"].upper() + ".filt.bbmap.bam"),
+    group: "align"
     params:
-        name_param="{sample}"
+        name_param="{sample}",
+        gap_type=config["divrge_param"]["gap_type"]
     envmodules:
         config["mod_params"]["samtools_mod"],
+        config["mod_params"]["sambamba"]
+    threads: 16
     shell:
         """
+        search_char={params.gap_type}
         echo {input.rmd_bam}
-        samtools view {input.rmd_bam} | awk -F'\t' 'index($6, "N")' | cut -f 1,2,3,4,5,6 | uniq  > {output.split_txt}
-        touch {output.split_txt}
+        echo $search_char
+        sambamba view -t {threads} -f bam --filter 'cigar =~ /([1-9][0-9]+)[=M].*[3-9][0-9]*[N].*([1-9][0-9]+)[=M]/' {input.rmd_bam} -o {output.filt_bam}
+        touch {output.filt_bam}
+        samtools view {output.filt_bam} | cut -f 1,2,3,4,5,6 | uniq  > {output.split_txt}
         echo {params.name_param}
         sed -i "s/$/\t{params.name_param}/" {output.split_txt}
         sed -i 's/\t/,/g' {output.split_txt}
         sed -i 1i"readname,flags,segment,left_pos,mapq,cigar,name" {output.split_txt}
         """
 
+
 rule divrge:
     input:
         ref=config["params"]["ref"],
-        features=config["params"]["output"] + "DVG/" + config["params"]["strain"].upper() + ".FeaturesOutput.csv",
         deletions=config["params"]["output"] + "N_files/{sample}." + config["params"]["strain"].upper() + ".split.txt",
     output:
         final_one=config["params"]["output"] + "DVG/{sample}.DVG.FINAL.OneGap." + config["params"]["strain"].upper() + ".N" + config['divrge_param']['gap_size'] + ".Mis" + config["divrge_param"]["mismatch"] + ".M" + config["divrge_param"]["align_length"] + ".G" + config["divrge_param"]["group_size"] + ".csv"
-    group: "post"
+    group: "align"
     params:
         strain=config["params"]["strain"].upper(),
         mis=config["divrge_param"]["mismatch"],
+        indel=config["divrge_param"]["indel"],
         gap_size=config["divrge_param"]["gap_size"],
         align_len=config["divrge_param"]["align_length"],
         group_size=config["divrge_param"]["group_size"],
         save_dir=config["params"]["output"] + "DVG/",
         script_dir=config["params"]["script_dir"],
         env_path=config["params"]["venv_path"],
-        ninput=config["divrge_param"]["ninput"],
+        ninput=config["divrge_param"]["nbams"],
         njob_number=config["divrge_param"]["ncores"],
+        gap_type=config["divrge_param"]["gap_type"],
     envmodules:
         config["mod_params"]["python_mod"],
-    threads:2,
+    threads: 16
+    benchmark: 
+        config["params"]["output"] + "benchmarks/divrge/{sample}.tsv"
     shell:
         """
         source {params.env_path}
@@ -120,30 +90,86 @@ rule divrge:
             --strain {params.strain} \
             --ref {input.ref} \
             --file {input.deletions} \
-            --idx {input.features} \
             --save_dir {params.save_dir} \
             --align_length {params.align_len} \
-            --gap_size {params.group_size} \
-            --total_mismatch {params.mis}  \
+            --gap_size {params.gap_size} \
+            --total_mismatch {params.mis} \
+            --total_indel {params.indel} \
             --group_bw {params.group_size} \
             --nbams {params.ninput} \
-            --njob {params.njob_number}
+            --njob {params.njob_number} \
+            --gap_type {params.gap_type}
 
         touch {output.final_one}
 
         deactivate
         """
 
+
+rule ghost_reads:
+    input:
+        ref=config["params"]["ref"],
+        rmd_bam=config["params"]["bamfiles"] + "/" + config["params"]["begin"] + "{sample}" + config["params"]["ending"],
+    output:
+        rd_file=config["params"]["output"] + "read_depth/{sample}." + config["params"]["strain"].upper() + ".q" + config['divrge_param']['qual_cutoff'] + ".rd.csv",
+    params:
+        strain=config["params"]["strain"].upper(),
+        qual_cutoff = config["divrge_param"]["qual_cutoff"],
+        env_path = config["params"]["venv_path"],
+        output_location=config["params"]["output"] + "read_depth/",
+        script_dir=config["params"]["script_dir"],
+    threads: 16
+    group: "align"
+    benchmark: 
+        config["params"]["output"] + "benchmarks/ghost_reads/{sample}.tsv"  
+    shell:
+        """
+        source {params.env_path}
+
+        python3 {params.script_dir}pull_ghost_reads.py \
+            --ref {input.ref} \
+            --infile {input.rmd_bam}  \
+            --qual_cutoff {params.qual_cutoff} \
+            --strain {params.strain} \
+            --outputdir {params.output_location} \
+            --njobs {threads}
+        """
+
+
 rule concat_files:
     input:
         dvg_files=expand(config["params"]["output"] + "DVG/{sample}.DVG.FINAL.OneGap." + config["params"]["strain"].upper() + ".N" + config['divrge_param']['gap_size'] + ".Mis" + config["divrge_param"]["mismatch"] + ".M" + config["divrge_param"]["align_length"] + ".G" + config["divrge_param"]["group_size"] + ".csv", sample = SAMPLES),
     output:
         catfile=config["params"]["output"] + "DVG/" + config["params"]["strain"].upper() + ".DVG.FINAL.OneGap." + "N" + config['divrge_param']['gap_size'] + ".Mis" + config["divrge_param"]["mismatch"] + ".M" + config["divrge_param"]["align_length"] + ".G" + config["divrge_param"]["group_size"] + ".csv",
-    group: "last"
+    group: "final"
     params:
         direct=config["params"]["output"] + "DVG/",
-        strain=config["params"]["strain"].upper()
+        strain=config["params"]["strain"].upper(),
+        count_filter=config["divrge_param"]["min_count"]
     shell:
         """
-        awk '(NR == 1) || (FNR > 1)' {params.direct}*FINAL.OneGap.{params.strain}* > {output.catfile}
+        count_filter={params.count_filter}
+        awk '(NR == 1) || (FNR > 1)' {params.direct}*FINAL.OneGap.{params.strain}* | awk -F ',' -v count="$count_filter" '$12 > count' > {output.catfile}
+        """
+
+
+rule make_calcs:
+    input:
+        rd_files=expand(config["params"]["output"] + "read_depth/{sample}." + config["params"]["strain"].upper() + ".q" + config['divrge_param']['qual_cutoff'] + ".rd.csv", sample = SAMPLES),
+        catfile=config["params"]["output"] + "DVG/" + config["params"]["strain"].upper() + ".DVG.FINAL.OneGap." + "N" + config['divrge_param']['gap_size'] + ".Mis" + config["divrge_param"]["mismatch"] + ".M" + config["divrge_param"]["align_length"] + ".G" + config["divrge_param"]["group_size"] + ".csv",
+    output:
+        calc_file=config["params"]["output"] + "read_depth/" + config["params"]["strain"].upper() + ".rd_calculations.csv",
+    group: "final"
+    params:
+        direct=config["params"]["output"] + "read_depth/",
+        strain=config["params"]["strain"].upper(),
+        count_filter=config["divrge_param"]["min_count"]
+    benchmark: 
+        config["params"]["output"] + "benchmarks/calculations.tsv"  
+    shell:
+        """
+        python3 calculate_abundance.py \
+            --path {params.direct} \
+            --dvgs {input.catfile} \
+            --outfile {output.calc_file}
         """
