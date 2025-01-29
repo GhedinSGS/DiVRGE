@@ -1,0 +1,39 @@
+---
+params:
+  ref: "/data/johnsonkate/test_hmh/reference/SARS-CoV2.fa"
+  reads: "/data/SGSlab/HMH-COV2/run_106-fastq/out/trimmomatic"
+  begin1: ""
+  ending1: "_trimmed_1.fq.gz"
+  begin2: ""
+  ending2: "_trimmed_2.fq.gz"
+  output: "/data/johnsonkate/test_hmh/"
+  maxindel: "30000"
+  minindel: "5"
+  primers: "/data/johnsonkate/test_hmh/reference/nextera_flu.fa"
+  rev_primers: "/data/johnsonkate/test_hmh/reference/nextera_flu_rc.fa"
+  strain: "SARS2"
+  gigs: "8G"
+  script_dir: "/data/johnsonkate/test_hmh/scripts/"
+  venv_path: "/home/johnsonkate/divrge/bin/activate"
+
+divrge_param:
+  mismatch: '2'
+  indel: '2'
+  gap_size: '5'
+  align_length: '28'
+  group_size: '5'
+  ncores: "4"
+  nbam: "1"
+  gap_type: "N"
+  min_count: "10"
+  qual_cutoff: "25"
+
+mod_params:
+  samtools_mod: "samtools/1.14"
+  python_mod: "python/3.8"
+  bbtools: "bbtools/38.96"
+  bbtools_path: "/usr/local/apps/bbtools/38.96/bbmap_src/"
+  picard_mod: "picard/3.1.0"
+  picard_jar: "$PICARD_JAR"
+  sambamba: "sambamba/1.0.1"
+  cutadapt_mod: "cutadapt/4.7"
