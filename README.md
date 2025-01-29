@@ -91,7 +91,7 @@ tzdata          2023.3
 
 <h2 align="center" id="config-run"> Adjusting config and running </h2>
 
-## snakefile_main_align (recommended): Align + SNV + DiVRGE <br>
+## snakefile_main_align (recommended): Trim + Align + DiVRGE <br>
 
 This workflow trims (trimmomatic) and aligns (BBmap) paired-end fastq data. BBmap alignment files are used to pull split-read information and call deletions with DiVRGE. This workflow will generate subdirectories in the defined working directory to organize and store all outputs.
 
@@ -174,7 +174,7 @@ mod_params: # modules to load
 
 ```
 
-## snakefile_divrge_only includes: DiVRGE only (individual samples)<br>
+## snakefile_divrge_only includes: DiVRGE rules only <br>
 If you have already aligned your data using BBmap or a similar split-read aligner, you can run DiVRGE specific rules with 'snakefile_divrge_only'.<br>
 
 - Download config_divrge.yaml file.
