@@ -1,0 +1,128 @@
+# ------------------------------------------------------------------------------
+# Title: DiVRGE (deletions in virus genomes extractor) pipeline
+# Description: This Snakemake workflow pulls split reads from virus genome alignments and
+#                characterizes and quantifies deletions
+# Author: Katherine Johnson (kate.ee.johnson12@gmail.com)
+# Date: 2025-02-25
+# Version: 1.0.0
+# Dependencies: 
+#   - see config_divrge.yaml for package details
+# Input: 
+#   - Aligned virus genomes (BAM format)
+# Usage:
+#   snakemake -c4 --use-envmodules -s snakefile_divrge
+# License: MIT License
+# ------------------------------------------------------------------------------
+
+
+VERSION = 1.0.0
+
+configfile: "config_divrge.yaml"
+
+import re
+
+BAM, = glob_wildcards(config["params"]["bamfiles"] + "/" + config["params"]["begin"] + "{sample}" + config["params"]["ending"])
+SAMPLES = sorted(set([x for x in BAM if "Undetermined" not in x]))
+print(SAMPLES)
+
+wildcard_constraints:
+    sample='|'.join([re.escape(x) for x in SAMPLES])
+
+rule all:
+    input:
+        expand(config["params"]["output"] + "DVG/{sample}.DVG.FINAL.OneGap." + config["params"]["strain"].upper() + ".N" + config['divrge_param']['gap_size'] + ".Mis" + config["divrge_param"]["mismatch"] + ".M" + config["divrge_param"]["align_length"] + ".G" + config["divrge_param"]["group_size"] + ".csv", sample = SAMPLES),
+        config["params"]["output"] + "DVG/" + config["params"]["strain"].upper() + ".DVG.FINAL.OneGap." + "N" + config['divrge_param']['gap_size'] + ".Mis" + config["divrge_param"]["mismatch"] + ".M" + config["divrge_param"]["align_length"] + ".G" + config["divrge_param"]["group_size"] + ".csv",
+        
+rule pull_split:
+    input:
+        rmd_bam=config["params"]["bamfiles"] + "/" + config["params"]["begin"] + "{sample}" + config["params"]["ending"],
+    output:
+        split_txt = temp(config["params"]["output"] + "N_files/{sample}." + config["params"]["strain"].upper() + ".split.txt"),
+        filt_bam=temp(config["params"]["output"] + "bamfiles/rmdups/{sample}." + config["params"]["strain"].upper() + ".filt.bbmap.bam"),
+        filt_bam_idx=temp(config["params"]["output"] + "bamfiles/rmdups/{sample}." + config["params"]["strain"].upper() + ".filt.bbmap.bam.bai"),
+    group: "divrge"
+    params:
+        name_param="{sample}",
+        gap_type=config["divrge_param"]["gap_type"]
+    envmodules:
+        config["mod_params"]["samtools_mod"],
+        config["mod_params"]["sambamba"]
+    threads: 16
+    shell:
+        """
+        search_char={params.gap_type}
+        echo {input.rmd_bam}
+        echo $search_char
+        sambamba view -t {threads} -f bam --filter 'cigar =~ /([1-9][0-9]+)[=M].*[3-9][0-9]*[N].*([1-9][0-9]+)[=M]/' {input.rmd_bam} -o {output.filt_bam}
+        touch {output.filt_bam}
+        samtools view {output.filt_bam} | cut -f 1,2,3,4,5,6 | uniq  > {output.split_txt}
+        echo {params.name_param}
+        sed -i "s/$/\t{params.name_param}/" {output.split_txt}
+        sed -i 's/\t/,/g' {output.split_txt}
+        sed -i 1i"readname,flags,segment,left_pos,mapq,cigar,name" {output.split_txt}
+        """
+
+
+rule divrge:
+    input:
+        ref=config["params"]["ref"],
+        deletions=config["params"]["output"] + "N_files/{sample}." + config["params"]["strain"].upper() + ".split.txt",
+    output:
+        final_one=config["params"]["output"] + "DVG/{sample}.DVG.FINAL.OneGap." + config["params"]["strain"].upper() + ".N" + config['divrge_param']['gap_size'] + ".Mis" + config["divrge_param"]["mismatch"] + ".M" + config["divrge_param"]["align_length"] + ".G" + config["divrge_param"]["group_size"] + ".csv"
+    group: "divrge"
+    params:
+        strain=config["params"]["strain"].upper(),
+        mis=config["divrge_param"]["mismatch"],
+        indel=config["divrge_param"]["indel"],
+        gap_size=config["divrge_param"]["gap_size"],
+        align_len=config["divrge_param"]["align_length"],
+        group_size=config["divrge_param"]["group_size"],
+        save_dir=config["params"]["output"] + "DVG/",
+        script_dir=config["params"]["script_dir"],
+        env_path=config["params"]["venv_path"],
+        ninput=config["divrge_param"]["nbams"],
+        njob_number=config["divrge_param"]["ncores"],
+        gap_type=config["divrge_param"]["gap_type"],
+    envmodules:
+        config["mod_params"]["python_mod"],
+    threads: 16
+    benchmark: 
+        config["params"]["output"] + "benchmarks/divrge/{sample}.tsv"
+    shell:
+        """
+        source {params.env_path}
+
+        python3 {params.script_dir}DiVRGE.py \
+            --strain {params.strain} \
+            --ref {input.ref} \
+            --file {input.deletions} \
+            --save_dir {params.save_dir} \
+            --align_length {params.align_len} \
+            --gap_size {params.gap_size} \
+            --total_mismatch {params.mis} \
+            --total_indel {params.indel} \
+            --group_bw {params.group_size} \
+            --nbams {params.ninput} \
+            --njob {params.njob_number} \
+            --gap_type {params.gap_type}
+
+        touch {output.final_one}
+
+        deactivate
+        """
+
+rule concat_files:
+    input:
+        dvg_files=expand(config["params"]["output"] + "DVG/{sample}.DVG.FINAL.OneGap." + config["params"]["strain"].upper() + ".N" + config['divrge_param']['gap_size'] + ".Mis" + config["divrge_param"]["mismatch"] + ".M" + config["divrge_param"]["align_length"] + ".G" + config["divrge_param"]["group_size"] + ".csv", sample = SAMPLES),
+    output:
+        catfile=config["params"]["output"] + "DVG/" + config["params"]["strain"].upper() + ".DVG.FINAL.OneGap." + "N" + config['divrge_param']['gap_size'] + ".Mis" + config["divrge_param"]["mismatch"] + ".M" + config["divrge_param"]["align_length"] + ".G" + config["divrge_param"]["group_size"] + ".csv",
+    group: "final"
+    params:
+        direct=config["params"]["output"] + "DVG/",
+        strain=config["params"]["strain"].upper(),
+        count_filter=config["divrge_param"]["min_count"]
+    shell:
+        """
+        count_filter={params.count_filter}
+        awk '(NR == 1) || (FNR > 1)' {params.direct}*FINAL.OneGap.{params.strain}* | awk -F ',' -v count="$count_filter" '$12 > count' > {output.catfile}
+        """
