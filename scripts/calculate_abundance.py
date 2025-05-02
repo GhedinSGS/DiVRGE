@@ -57,14 +57,21 @@ def total_shannon(grouped):
     return pd.Series(d, index=index_list)
 
 
+def smooth_values(df, column_id, window_size = 20):
+    padded_data = np.pad(df[column_id], (window_size // 2, window_size - 1 - window_size // 2), mode='edge')
+    kernel = np.ones((window_size, ))/window_size
+    return( np.convolve(padded_data, kernel, mode='valid'))  # valid is more considerate of edges
+
+
 def update_values(dvgs, read_depth, name, coverage_filter = 1):
+    dvg_cols = []
 
     for _, deletion in dvgs.iterrows():
         """
         For every deletion that passes our quality checks:
         - pull the deletion info
         - pull the # of reads for that deletion
-        - generate a new colum on the read count df with DVG label and read count
+        - generate a new column on the read count df with DVG label and read count
         - Add zero's at positions where deletion is not at
         """
         chrom = deletion['segment']  # segment
@@ -72,7 +79,8 @@ def update_values(dvgs, read_depth, name, coverage_filter = 1):
         end = deletion['DeletionEnd']  # deletion end
         value = deletion['deletion_count']  # number of reads spanning deletion
         deletion = "{0}_{1}".format(deletion['segment'], deletion['Deletion'])  # name of deletion for column segment + coordinates
-        
+        dvg_cols.append(deletion)
+
         # S = richness of deletions at position
         if 'S' not in read_depth.columns:  # If this is the first instance of adding the S column to the df
             read_depth['S'] = 0  # add and fill with 0's
@@ -85,22 +93,59 @@ def update_values(dvgs, read_depth, name, coverage_filter = 1):
         
         
     read_depth.iloc[:, 6:] = read_depth.iloc[:, 6:].fillna(0)  # for all of the new cols we just added (S + DVGs) fill na's with 0's
+    
     columns_to_sum = read_depth.columns[7:]  # pull all DVG columns - will be 0 if not within seg
-    read_depth['no_deletion_probability'] = read_depth['totalcount'] - (read_depth[columns_to_sum].sum(axis=1))  # determine the number of reads with no deletion at given site
-    # no_deletions
-    columns_to_divide = read_depth.columns[7:]     # Divide selected columns by the divisor column
+
+    #print(columns_to_sum)
+    # deletions that pass cutoff:     
+    read_depth.insert(7, "total_deleted", read_depth[columns_to_sum].sum(axis=1), True)  # add as 7th col
+
+    
+
+    read_depth.insert(8, "N_smooth", smooth_values(read_depth, "N", 20), True)
+    read_depth.insert(9, "totalcount_smooth", smooth_values(read_depth, "totalcount", 20), True)
+    read_depth.insert(10, "total_deleted_smooth", smooth_values(read_depth, "total_deleted", 20), True)
+
+    #print(read_depth[["total_deleted","total_deleted_smooth","N","N_smooth","totalcount", "totalcount_smooth"]])
+
+    # add at the end of the df 
+    # add in later
+    #read_depth['no_deletion_probability'] = read_depth['totalcount_smooth'] - read_depth["total_deleted_smooth"] #(read_depth[columns_to_sum].sum(axis=1))  # determine the number of reads with no deletion at given site
+    
+    #print(read_depth.columns[:14])
+
+    ## BREAK PT!
+    columns_to_divide = read_depth.columns[11:]     # Divide selected columns by the divisor column
+
+    #print(columns_to_divide)
+    #print(read_depth.columns[10:])
+    #print('dividing by....')
+    #print(columns_to_divide)
+
+
+    read_depth['no_deletion_probability'] = (read_depth['totalcount_smooth'] - read_depth["total_deleted_smooth"])/ read_depth['totalcount_smooth'] #(read_depth[columns_to_sum].sum(axis=1))  # determine the number of reads with no deletion at given site
+    #read_depth['COMPARE'] = read_depth['totalcount_smooth'] - (read_depth[columns_to_sum].sum(axis=1))
+
+    #columns_to_divide = 'COMPARE'
+    read_depth[columns_to_divide] = read_depth[columns_to_divide].div(read_depth['totalcount_smooth'], axis=0)
+    #print(read_depth[['no_deletion_probability']])
+    #print(read_depth[['no_deletion_probability', 'COMPARE']])
+
+
+    
     read_depth[columns_to_divide] = read_depth[columns_to_divide].div(read_depth['totalcount'], axis=0)  # divide everything by total count at each position
-    read_depth.iloc[:, 7:] = read_depth.iloc[:, 7:].fillna(0)  # no longer including 'S' here - if na - then no mapping - 0
-
+    
+    
+    read_depth.iloc[:, 11:] = read_depth.iloc[:, 11:].fillna(0)  # no longer including 'S' here - if na - then no mapping - 0
+    
     read_depth['Hsite'] = read_depth[columns_to_divide].apply(lambda row: site_shannon(row, columns_to_divide), axis=1)  # caculate shan entropy at each site
-
+    
+    read_depth['no_deletion_probability'] = (read_depth['totalcount_smooth'] - read_depth["total_deleted_smooth"]) / read_depth['totalcount_smooth'] #(read_depth[columns_to_sum].sum(axis=1))  # determine the number of reads with no deletion at given site
     # prepping for max normalization
     read_depth.loc[(read_depth['no_deletion_probability'] > 0), "S"] += 1  # add 1 to the diversity if we have no deletions - if no deletions exist, and totalcount >0 then no deletions will equal 1
     read_depth['Hmax_site'] = read_depth['Hsite'] / np.log(read_depth['S'])  # normalized by max possible entropy normalization max ent = log2(# of deletions). if 1 then it is highly entropic? ha - if total count 0
     read_depth['deletion_probability_site'] = 1 - read_depth['no_deletion_probability']  # calc the probability of a site is deleted 
-
     temp = read_depth[(read_depth.totalcount >= coverage_filter)].copy()  # making this temp so we output updated files 
-
 
     if temp.shape[0] > 0:    # after filtering by read depth - do the following if the df is not empty
         # per segment calcs:
@@ -122,8 +167,9 @@ def update_values(dvgs, read_depth, name, coverage_filter = 1):
         #print(d1)
 
     
-    
-    return d1, read_depth[['name', 'segment', 'ntpos', "N", 'totalcount',"mapped_totalcount", "S", "no_deletion_probability", "Hsite", "Hmax_site", "deletion_probability_site"]].copy()
+    ## UPDATE THIS TOO
+    return d1, read_depth[['name', 'segment', 'ntpos', "N", "N_smooth",'totalcount',"totalcount_smooth","total_deleted","total_deleted_smooth","mapped_totalcount", "S", "no_deletion_probability", "Hsite", "Hmax_site", "deletion_probability_site"]].copy()
+
 
 def seg_abundance(grouped):
     d = {}
@@ -155,9 +201,9 @@ def eco_calcs(grouped):
     d['S']  = grouped['estimated_freq'].count()  # richness
     d['mean_freq'] = grouped['estimated_freq'].mean()
     d['sd_freq'] = grouped['estimated_freq'].std()
-    d['deletion_count'] = grouped['deletion_count'].sum()
+    d['deletion_read_count'] = grouped['deletion_count'].sum()
 
-    return pd.Series(d, index=['BP', 'S','mean_freq','sd_freq','deletion_count'])
+    return pd.Series(d, index=['BP', 'S','mean_freq','sd_freq','deletion_read_count'])
 
 def update_sample(sample):
     time.sleep(0.1)  # Simulate a delay in updating the sample
@@ -171,6 +217,7 @@ if __name__ == '__main__':
     area_data = pd.DataFrame()  # 'area' data in which we calculate the probability of pulling a deleted site
     shannon_data = pd.DataFrame()  # shannon data for each sample and segment
 
+    # set up progress bar
     with tqdm(total=len(filelist), desc="Updating samples") as pbar:
 
         for f in filelist:
@@ -181,7 +228,6 @@ if __name__ == '__main__':
             df = pd.read_csv("{0}/{1}".format(args.path,f), sep=',', keep_default_na=False)  # read in read depth file
             n = df['name'].unique()[0]  # pull out name for other things
             genome_size =  (df.shape[0])
-            #print(n)  # prin the name
 
             # calculate segment specific areas: 
             seg_info = df.groupby(['name','segment'], as_index = False).apply(seg_abundance)#, include_groups = False)  # apply function to calculate proportion INCLUDE GROUPS IS A NEW THING
@@ -219,13 +265,11 @@ if __name__ == '__main__':
     d2 = updated_dvg.groupby(['name','genome_size'], as_index = False).apply(eco_calcs)  # make ecology calcs across the genome for samples
     d2['S_norm'] = d2['S'] / (d2['genome_size'] / 1000)  # normalize richness by kb
     d2['segment'] = 'genome'  # add a 'segment' column to allow for rbinding
-    #d2['genome_length'] = d2['genome_size'] / 1000  # Output the way in which we normalized data
     d2.drop(['genome_size'], axis=1, inplace=True)  # Drop - will be a duplicate in later merges
    
     # segment specific calculations:
     d1 = updated_dvg.groupby(['name','segment','segment_size'], as_index = False).apply(eco_calcs)  # make ecology calcs for each segment and sample
     d1['S_norm'] = d1['S'] / (d1['segment_size'] / 1000)
-    #d1['genome_length'] = (d1['segment_size']) / 1000
     d1.drop(['segment_size'], axis=1, inplace=True) 
 
     d1 = pd.concat([d1, d2], ignore_index=True,axis = 0)  # concat the genome and segment data. 
@@ -234,6 +278,7 @@ if __name__ == '__main__':
     # d1 = diversity calculations, area_data = area information
     d1 = pd.merge(d1, area_data, left_on = ['name','segment'], right_on = ['name','segment'], how = 'outer')
 
+    #print(d1)
     d1.to_csv(args.outfile, index=False)
 
-    updated_dvg.to_csv(args.dvgs, index=False)  # write to file  UNDO WHEN FINISHED
+    #updated_dvg.to_csv(args.dvgs, index=False)  # write to file  UNDO WHEN FINISHED

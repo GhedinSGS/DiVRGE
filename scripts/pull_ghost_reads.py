@@ -35,15 +35,18 @@ License:
 import sys
 import os
 import time
+import random
 import argparse
 import pysam
 import logging
+import itertools
 #import multiprocessing
 import numpy as np
 import pandas as pd
 #from functools import partial
 from collections import defaultdict
 from joblib import Parallel, delayed
+from multiprocessing import Manager
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -180,27 +183,80 @@ def printer(consensus_dict, sampname, segment, ntpos):
     }
     return pd.DataFrame(data)
 
+def pull_read_names(regions, bamname):
+    """
+    reads may overlap chunks, filtering by end/start of alignment will lead to undercounting, 
+    not filtering and running in parallel will lead to overcounting. This function takes in chunk information,
+    pulls read names, and randomly assigns to groupings. 
+    """
+    samfile = pysam.AlignmentFile(bamname, "rb")
+    name_dict = {}
+    for region in regions: 
+        r = f'{region[0]}_{region[1]}_{region[2]}'
+        fetch_chunk = samfile.fetch(region[0], region[1], region[2])
+        mapped_names = [read.query_name for read in fetch_chunk if not read.is_unmapped and read.reference_name == region[0]]
+        name_dict[r] = mapped_names
 
-def process_chunk(region, bamname, ref_dict, qual_cutoff):
+    samfile.close()
+
+    all_names = []   #make a list of all names
+    for names in name_dict.values():
+        all_names.extend(names)
+
+    name_counts = {} # count whether the name is a dup or not by region
+    for name in all_names:
+        if name in name_counts:
+            name_counts[name] += 1
+        else:
+            name_counts[name] = 1
+    
+    unique_names = {name for name, count in name_counts.items() if count == 1}
+
+    duplicate_names = {name for name, count in name_counts.items() if count > 1}
+    
+    for key in name_dict:
+        name_dict[key] = [name for name in name_dict[key] if name not in duplicate_names]
+
+    for name in duplicate_names:
+        chosen_key = random.choice(list(name_dict.keys()))
+        name_dict[chosen_key].append(name)
+    
+    return name_dict
+
+
+def process_chunk(segment, reads, bamname, ref_dict, qual_cutoff):
     """Process a chunk of the BAM file."""
     samfile = pysam.AlignmentFile(bamname, "rb")
+    segment_reads = {read.query_name for read in samfile.fetch(segment) if not read.is_unmapped}
+    name_indexed = pysam.IndexedReads(samfile)
+    name_indexed.build()
+    # pull reads in chunk and samfile segment/chrom region
+    common = set(reads).intersection(segment_reads)
+    
 
     forward_dict = defaultdict(lambda: defaultdict(int))  # initializing dictionaries using default dict
     reverse_dict = defaultdict(lambda: defaultdict(int))
     insertion_dict = defaultdict(lambda: defaultdict(int))
     consensus_dict = defaultdict(lambda: defaultdict(int))
 
-    for read in samfile.fetch(region=region):
-        if not read.is_unmapped:
-            cigartup = read.cigartuples
-            unfiltreadidx = read.get_reference_positions(full_length=True)
-            unfiltread = list(read.query_sequence)
-            unfiltreadqual = read.query_qualities
-            is_reverse = read.is_reverse
-            analyzer(is_reverse, seq_updater(cigartup, unfiltread, unfiltreadidx, unfiltreadqual), qual_cutoff, reverse_dict, forward_dict, consensus_dict, insertion_dict)
+    for name in common:
+        try:
+            iterator = name_indexed.find(name)
+        except KeyError:
+            continue
+        
+        for read in iterator:
+            if not read.is_unmapped and read.reference_name == segment:
+                cigartup = read.cigartuples
+                unfiltreadidx = read.get_reference_positions(full_length=True)
+                unfiltread = list(read.query_sequence)
+                unfiltreadqual = read.query_qualities
+                is_reverse = read.is_reverse
+                analyzer(is_reverse, seq_updater(cigartup, unfiltread, unfiltreadidx, unfiltreadqual), qual_cutoff, reverse_dict, forward_dict, consensus_dict, insertion_dict)
 
     samfile.close()
-    return forward_dict, reverse_dict, insertion_dict, consensus_dict
+    
+    return forward_dict, reverse_dict, insertion_dict, consensus_dict #, read_count
 
 
 def merge_dicts(dicts):
@@ -216,24 +272,34 @@ def merge_dicts(dicts):
 def main_function(sample_name, segment, ref_dict, bamname, qual_cutoff=30, njobs=4):
     """Main function to process BAM file and calculate read abundance in parallel."""
     # Split the segment into smaller regions for parallel processing
+    
     seglen = len(ref_dict[segment])  # Pull segment length information to determine chunk size
+
     chunk_size = seglen // njobs
     # establishing naming of regions to pull - read by pysam
-    regions = [f"{segment}:{i}-{min(i + chunk_size, seglen)}" for i in range(1, seglen, chunk_size)]
-    results = Parallel(n_jobs=njobs, backend="loky")(delayed(process_chunk)(region, bamname, ref_dict, qual_cutoff) for region in regions)
+    regions = [[segment, i, min(i + chunk_size, seglen)] for i in range(0, seglen, chunk_size)]
+    if seglen % chunk_size != 0: # if there is a remainder after dividing by chunk size
+        regions = regions[:-1]  # remove the last chunk (usually only 1-2nt long)
+        regions[-1] = [segment, regions[-1][1], seglen] # make second to last chunk go to full length of segment
+    
+    name_sets = pull_read_names(regions, bamname)
+
+    results = Parallel(n_jobs=njobs, backend="loky")(delayed(process_chunk)(segment, reads, bamname, ref_dict, qual_cutoff) for reads in name_sets.values())
 
     # Merge the results from all processes
     forward_dicts, reverse_dicts, insertion_dicts, consensus_dicts = zip(*results)
+    
     forward_dict = merge_dicts(forward_dicts)
     reverse_dict = merge_dicts(reverse_dicts)
     insertion_dict = merge_dicts(insertion_dicts)
     consensus_dict = merge_dicts(consensus_dicts)
-
-
+    
     # print out ntpos specific information 
     ntpos_list = sorted(list(range(0,seglen)))  # using segment length info - dict.keys() won't work if no reads/no coverage
+    
     segout = [printer(consensus_dict, sample_name, segment, ntpos) for ntpos in ntpos_list]
-    return pd.concat(segout)
+    
+    return pd.concat(segout) #, sum(read_counts)
 
 
 if __name__ == '__main__':
@@ -252,15 +318,11 @@ if __name__ == '__main__':
     logging.info(f"Outfile location and name: {outfile}")
 
     result = []
-    
     for segment in ref_dict:
-        # run for each segment/chrom
+        logging.info(f"Processing...: {segment}")
         result.append(main_function(sample_name, segment, ref_dict, args.infile, qual_cutoff, args.njobs))
-    
     result = pd.concat(result, ignore_index = True)
-
     result.to_csv(outfile, header=True, index=False)
-
     logging.info("Finished running")
     end_time = time.time()
     logging.info(f'Total time: {end_time - start_time:.4f} s')
